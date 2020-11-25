@@ -1,0 +1,15 @@
+{
+  "name": "githubsubmoduleupdater",
+  "version": "1.0.0",
+  "description": "Update submodule in parent github repository",
+  "main": "updater.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Christopher Bernjus",
+  "license": "ISC",
+  "dependencies": {
+    "@octokit/rest": "^18.0.9",
+    "@octokit/webhooks": "^7.15.1"
+  }
+}
