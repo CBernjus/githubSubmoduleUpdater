@@ -11,6 +11,7 @@
   "dependencies": {
     "@octokit/rest": "^18.0.9",
     "@octokit/webhooks": "^7.15.1",
-    "eventsource": "^1.0.7"
+    "eventsource": "^1.0.7",
+    "simple-node-logger": "^18.12.24"
   }
 }
