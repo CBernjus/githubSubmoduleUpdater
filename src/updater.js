@@ -6,7 +6,6 @@ const logfile = require('simple-node-logger').createRollingFileLogger({
 });
 const { Octokit } = require('@octokit/rest');
 const { Webhooks } = require('@octokit/webhooks');
-const EventSource = require('eventsource');
 const { format } = require('path');
 
 const config = JSON.parse(fs.readFileSync('src/config.json'));
@@ -117,20 +116,6 @@ async function createCommit(submodule, treeSHA, moduleSHA, parentSHA) {
         });
 }
 
-/*async function getRef(submodule) {
-    return await octokit.git
-        .getRef({
-            owner: config.owner,
-            repo: submodule.parentRepo,
-            ref: 'heads/master',
-        })
-        .then(({ data: ref }) => {
-            console.log(ref);
-            return ref;
-        })
-        .catch(logError);
-}*/
-
 async function updateRef(submodule, commitSHA) {
     return octokit.git
         .updateRef({
@@ -197,16 +182,4 @@ webhooks.on('push', async ({ id, name, payload }) => {
     }
 });
 
-const webhookProxyUrl = 'https://smee.io/uJILjrjcUnvqUFM';
-const source = new EventSource(webhookProxyUrl);
-source.onmessage = (event) => {
-    const webhookEvent = JSON.parse(event.data);
-    webhooks
-        .verifyAndReceive({
-            id: webhookEvent['x-request-id'],
-            name: webhookEvent['x-github-event'],
-            signature: webhookEvent['x-hub-signature'],
-            payload: webhookEvent.body,
-        })
-        .catch(logError);
-};
+require('http').createServer(webhooks.middleware).listen(3000);
