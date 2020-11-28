@@ -1,6 +1,212 @@
-const { Rest } = require('@octokit/rest');
+const fs = require('fs');
+const logfile = require('simple-node-logger').createRollingFileLogger({
+    logDirectory: 'log',
+    fileNamePattern: '<DATE>.log',
+    dateFormat: 'YYYY-MM-DD',
+});
+const { Octokit } = require('@octokit/rest');
 const { Webhooks } = require('@octokit/webhooks');
+const EventSource = require('eventsource');
+const { format } = require('path');
+
+const config = JSON.parse(fs.readFileSync('src/config.json'));
+const submodules = config.submodules;
+const submoduleRepos = submodules.map((module) => module.moduleRepo);
+
+function shortenSHAs(str) {
+    const matches = str.matchAll(/\(\w+?\)/g);
+    for (const match of matches) {
+        str = str.replace(match[0], match[0].substring(0, 8) + ')');
+    }
+    return str;
+}
+
+function log(msg, repoName = '') {
+    if (repoName) msg = `${config.owner}/${repoName}: ${msg}`;
+    console.log(shortenSHAs(msg));
+    logfile.log('info', msg);
+}
+
+function logReception(name, payload, minor = false) {
+    const origin = payload.repository.full_name;
+    const separator = origin === '' ? '' : ': ';
+    const msg = origin + separator + `Received ${name.toUpperCase()} event (${payload.after})`;
+    logfile.log('info', msg);
+    if (minor) {
+        console.log('\x1b[2m' + msg + '\x1b[0m');
+    } else {
+        console.log(msg);
+    }
+}
+
+function logError(error) {
+    console.log('\x1b[31m' + error.stack + '\x1b[0m');
+    logfile.log('error', error.stack);
+}
+
+function logDebug(msg) {
+    if (config.debug) {
+        console.log(msg);
+        logfile.log('debug', msg);
+    }
+}
+
+const octokit = new Octokit({
+    auth: config.auth,
+    userAgent: 'submoduleUpdater v1.0',
+});
+
+async function getParentHEAD(submodule) {
+    return octokit.repos
+        .getBranch({
+            owner: config.owner,
+            repo: submodule.parentRepo,
+            branch: submodule.parentBranch,
+        })
+        .then(({ data: branch }) => {
+            log(
+                `Fetched current HEAD (${branch.commit.sha}) on branch '${submodule.parentBranch}'`,
+                submodule.parentRepo
+            );
+            logDebug(branch.commit);
+
+            return branch.commit;
+        });
+}
+
+async function createTree(submodule, moduleSHA, parentTreeSHA) {
+    return octokit.git
+        .createTree({
+            owner: config.owner,
+            repo: submodule.parentRepo,
+            base_tree: parentTreeSHA,
+            tree: [
+                {
+                    path: submodule.modulePath,
+                    mode: '160000',
+                    type: 'commit',
+                    sha: moduleSHA,
+                },
+            ],
+        })
+        .then(({ data: tree }) => {
+            log(`Created tree (${tree.sha}) for commit (${moduleSHA})`, submodule.parentRepo);
+            logDebug(tree);
+
+            return tree;
+        });
+}
+
+async function createCommit(submodule, treeSHA, moduleSHA, parentSHA) {
+    return octokit.git
+        .createCommit({
+            owner: config.owner,
+            repo: submodule.parentRepo,
+            message: `auto-update submodule ${config.owner}/${submodule.moduleRepo} to (${moduleSHA})`,
+            tree: treeSHA,
+            parents: [parentSHA],
+        })
+        .then(({ data: commit }) => {
+            log(
+                `Created commit (${commit.sha}) for module ${submodule.moduleRepo} with tree (${treeSHA})`,
+                submodule.parentRepo
+            );
+            logDebug(commit);
+
+            return commit;
+        });
+}
+
+/*async function getRef(submodule) {
+    return await octokit.git
+        .getRef({
+            owner: config.owner,
+            repo: submodule.parentRepo,
+            ref: 'heads/master',
+        })
+        .then(({ data: ref }) => {
+            console.log(ref);
+            return ref;
+        })
+        .catch(logError);
+}*/
+
+async function updateRef(submodule, commitSHA) {
+    return octokit.git
+        .updateRef({
+            owner: config.owner,
+            ref: `heads/${submodule.parentBranch}`,
+            repo: submodule.parentRepo,
+            sha: commitSHA,
+        })
+        .then(({ data: edit }) => {
+            log(`Edit refs and added commit (${commitSHA})`, submodule.parentRepo);
+            logDebug(edit);
+
+            return edit;
+        });
+}
+
+// GitHub Webhooks
 
 const webhooks = new Webhooks({
-    secret: 'mysecret',
+    secret: config.secret,
 });
+
+webhooks.onAny(({ id, name, payload }) => {
+    if (name !== 'push') {
+        logReception(name, payload, true);
+    }
+});
+
+webhooks.on('push', async ({ id, name, payload }) => {
+    const index = submoduleRepos.indexOf(payload.repository.name);
+    if (index >= 0) {
+        const ref = payload.ref;
+        const submodule = submodules[index];
+        if (ref == 'refs/heads/' + submodule.moduleBranch) {
+            logReception(name, payload);
+            try {
+                const parentHEAD = await getParentHEAD(submodule);
+                const tree = await createTree(submodule, payload.after, parentHEAD.commit.tree.sha);
+                const commit = await createCommit(
+                    submodule,
+                    tree.sha,
+                    payload.after,
+                    parentHEAD.sha
+                );
+                //getRef(submodule);
+                await updateRef(submodule, commit.sha);
+            } catch (error) {
+                logError(error);
+                log(
+                    `NOT UPDATED - submodule is still at (${payload.before})`,
+                    submodule.parentRepo
+                );
+                return;
+            }
+            log(
+                `UPDATED submodule ${config.owner}/${submodule.moduleRepo} to (${payload.after})`,
+                submodule.parentRepo
+            );
+        } else {
+            logReception(name, payload, true);
+        }
+    } else {
+        logReception(name, payload, true);
+    }
+});
+
+const webhookProxyUrl = 'https://smee.io/uJILjrjcUnvqUFM';
+const source = new EventSource(webhookProxyUrl);
+source.onmessage = (event) => {
+    const webhookEvent = JSON.parse(event.data);
+    webhooks
+        .verifyAndReceive({
+            id: webhookEvent['x-request-id'],
+            name: webhookEvent['x-github-event'],
+            signature: webhookEvent['x-hub-signature'],
+            payload: webhookEvent.body,
+        })
+        .catch(logError);
+};
