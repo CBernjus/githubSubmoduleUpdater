@@ -187,7 +187,8 @@ function log(msg, repoName = '') {
 function logReception(name, payload, minor = false) {
     const origin = payload.repository.full_name;
     const separator = origin === '' ? '' : ': ';
-    const msg = origin + separator + `Received ${name.toUpperCase()} event (${payload.after})`;
+    const msg =
+        origin + separator + shortenSHAs(`Received ${name.toUpperCase()} event (${payload.after})`);
     logfile.log('info', msg);
     if (minor) {
         console.log('\x1b[2m' + msg + '\x1b[0m');
