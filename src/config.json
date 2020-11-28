@@ -1,0 +1,15 @@
+{
+    "debug": false,
+    "owner": "owner",
+    "auth": "auth",
+    "secret": "auth",
+    "submodules": [
+        {
+            "moduleRepo": "moduleRepoName",
+            "moduleBranch": "moduleBranch",
+            "modulePath": "path",
+            "parentRepo": "parentRepoName",
+            "parentBranch": "parentBranch"
+        }
+    ]
+}
